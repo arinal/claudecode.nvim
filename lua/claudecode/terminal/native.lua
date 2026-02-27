@@ -10,14 +10,86 @@ local bufnr = nil
 local winid = nil
 local jobid = nil
 local tip_shown = false
+local trim_timer = nil
 
 ---@type ClaudeCodeTerminalConfig
 local config = require("claudecode.terminal").defaults
 
 local function cleanup_state()
+  -- Stop and cleanup trim timer if it exists
+  if trim_timer then
+    if not trim_timer:is_closing() then
+      trim_timer:stop()
+      trim_timer:close()
+    end
+    trim_timer = nil
+  end
+
   bufnr = nil
   winid = nil
   jobid = nil
+end
+
+---Strip trailing whitespace from terminal buffer lines
+---This runs periodically to clean up padding added by the terminal emulator
+local function strip_trailing_whitespace_from_buffer()
+  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+    return
+  end
+
+  -- Use vim.schedule to safely modify the buffer from the timer callback
+  vim.schedule(function()
+    if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+      return
+    end
+
+    local ok, lines = pcall(vim.api.nvim_buf_get_lines, bufnr, 0, -1, false)
+    if not ok or not lines then
+      return
+    end
+
+    local modified = false
+    local cleaned_lines = {}
+    for _, line in ipairs(lines) do
+      local cleaned = line:gsub("%s+$", "")
+      table.insert(cleaned_lines, cleaned)
+      if cleaned ~= line then
+        modified = true
+      end
+    end
+
+    if modified then
+      -- Terminal buffers are normally not modifiable, so we need to temporarily enable it
+      local was_modifiable = vim.bo[bufnr].modifiable
+      vim.bo[bufnr].modifiable = true
+
+      pcall(vim.api.nvim_buf_set_lines, bufnr, 0, -1, false, cleaned_lines)
+
+      vim.bo[bufnr].modifiable = was_modifiable
+    end
+  end)
+end
+
+---Setup periodic timer to strip trailing whitespace from terminal buffer
+local function setup_whitespace_trimming()
+  -- Clean up existing timer if any
+  if trim_timer then
+    if not trim_timer:is_closing() then
+      trim_timer:stop()
+      trim_timer:close()
+    end
+    trim_timer = nil
+  end
+
+  -- Create new timer that runs every 100ms
+  trim_timer = vim.loop.new_timer()
+  if trim_timer then
+    trim_timer:start(
+      100, -- initial delay in ms
+      100, -- repeat interval in ms
+      strip_trailing_whitespace_from_buffer
+    )
+  end
 end
 
 local function is_valid()
@@ -133,6 +205,9 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   bufnr = vim.api.nvim_get_current_buf()
   vim.bo[bufnr].bufhidden = "hide"
   -- buftype=terminal is set by termopen
+
+  -- Setup periodic whitespace trimming to clean terminal buffer padding
+  setup_whitespace_trimming()
 
   if focus then
     -- Focus the terminal: switch to terminal window and enter insert mode
