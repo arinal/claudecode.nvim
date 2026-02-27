@@ -132,26 +132,6 @@ function M.open(cmd_string, env_table, config, focus)
   if term_instance and term_instance:buf_valid() then
     setup_terminal_events(term_instance, config)
     terminal = term_instance
-
-    -- Setup autocommand to trim trailing whitespace when yanking from terminal
-    local bufnr = term_instance.buf
-    if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
-      vim.api.nvim_create_autocmd("TextYankPost", {
-        buffer = bufnr,
-        callback = function()
-          local event = vim.v.event
-          if event.regcontents and type(event.regcontents) == "table" then
-            -- Trim trailing whitespace from each line
-            for i, line in ipairs(event.regcontents) do
-              event.regcontents[i] = line:gsub("%s+$", "")
-            end
-            -- Update the register with trimmed content
-            vim.fn.setreg(event.regname, event.regcontents, event.regtype)
-          end
-        end,
-        desc = "Trim trailing whitespace when copying from Claude Code terminal",
-      })
-    end
   else
     terminal = nil
     local logger = require("claudecode.logger")

@@ -134,23 +134,6 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   vim.bo[bufnr].bufhidden = "hide"
   -- buftype=terminal is set by termopen
 
-  -- Setup autocommand to trim trailing whitespace when yanking from terminal
-  vim.api.nvim_create_autocmd("TextYankPost", {
-    buffer = bufnr,
-    callback = function()
-      local event = vim.v.event
-      if event.regcontents and type(event.regcontents) == "table" then
-        -- Trim trailing whitespace from each line
-        for i, line in ipairs(event.regcontents) do
-          event.regcontents[i] = line:gsub("%s+$", "")
-        end
-        -- Update the register with trimmed content
-        vim.fn.setreg(event.regname, event.regcontents, event.regtype)
-      end
-    end,
-    desc = "Trim trailing whitespace when copying from Claude Code terminal",
-  })
-
   if focus then
     -- Focus the terminal: switch to terminal window and enter insert mode
     vim.api.nvim_set_current_win(winid)
