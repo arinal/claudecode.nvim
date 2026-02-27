@@ -6,10 +6,80 @@ local M = {}
 local snacks_available, Snacks = pcall(require, "snacks")
 local utils = require("claudecode.utils")
 local terminal = nil
+local trim_timer = nil
 
 --- @return boolean
 local function is_available()
   return snacks_available and Snacks and Snacks.terminal ~= nil
+end
+
+---Cleanup timer resources
+local function cleanup_timer()
+  if trim_timer then
+    if not trim_timer:is_closing() then
+      trim_timer:stop()
+      trim_timer:close()
+    end
+    trim_timer = nil
+  end
+end
+
+---Strip trailing whitespace from terminal buffer lines
+---This runs periodically to clean up padding added by the terminal emulator
+local function strip_trailing_whitespace_from_buffer()
+  if not terminal or not terminal:buf_valid() or not terminal.buf then
+    return
+  end
+
+  local bufnr = terminal.buf
+
+  -- Use vim.schedule to safely modify the buffer from the timer callback
+  vim.schedule(function()
+    if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+      return
+    end
+
+    local ok, lines = pcall(vim.api.nvim_buf_get_lines, bufnr, 0, -1, false)
+    if not ok or not lines then
+      return
+    end
+
+    local modified = false
+    local cleaned_lines = {}
+    for _, line in ipairs(lines) do
+      local cleaned = line:gsub("%s+$", "")
+      table.insert(cleaned_lines, cleaned)
+      if cleaned ~= line then
+        modified = true
+      end
+    end
+
+    if modified then
+      -- Terminal buffers are normally not modifiable, so we need to temporarily enable it
+      local was_modifiable = vim.bo[bufnr].modifiable
+      vim.bo[bufnr].modifiable = true
+
+      pcall(vim.api.nvim_buf_set_lines, bufnr, 0, -1, false, cleaned_lines)
+
+      vim.bo[bufnr].modifiable = was_modifiable
+    end
+  end)
+end
+
+---Setup periodic timer to strip trailing whitespace from terminal buffer
+local function setup_whitespace_trimming()
+  -- Clean up existing timer if any
+  cleanup_timer()
+
+  -- Create new timer that runs every 100ms
+  trim_timer = vim.loop.new_timer()
+  if trim_timer then
+    trim_timer:start(
+      100, -- initial delay in ms
+      100, -- repeat interval in ms
+      strip_trailing_whitespace_from_buffer
+    )
+  end
 end
 
 ---Setup event handlers for terminal instance
@@ -26,6 +96,7 @@ local function setup_terminal_events(term_instance, config)
       end
 
       -- Clean up
+      cleanup_timer()
       terminal = nil
       vim.schedule(function()
         term_instance:close({ buf = true })
@@ -37,6 +108,7 @@ local function setup_terminal_events(term_instance, config)
   -- Handle buffer deletion
   term_instance:on("BufWipeout", function()
     logger.debug("terminal", "Terminal buffer wiped")
+    cleanup_timer()
     terminal = nil
   end, { buf = true })
 end
@@ -132,6 +204,9 @@ function M.open(cmd_string, env_table, config, focus)
   if term_instance and term_instance:buf_valid() then
     setup_terminal_events(term_instance, config)
     terminal = term_instance
+
+    -- Setup periodic whitespace trimming to clean terminal buffer padding
+    setup_whitespace_trimming()
   else
     terminal = nil
     local logger = require("claudecode.logger")
@@ -164,6 +239,7 @@ function M.close()
   if not is_available() then
     return
   end
+  cleanup_timer()
   if terminal and terminal:buf_valid() then
     terminal:close()
   end
